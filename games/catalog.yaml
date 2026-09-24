@@ -1,0 +1,25 @@
+# Paths are filenames inside GAMES_DIR on the VPS, not downloads.
+# The disc image and the PS1 BIOS are supplied by the operator.
+games:
+  - id: tekken3
+    title: Tekken 3
+    system: ps1
+    players: 2
+    enabled: true
+    file: Tekken 3 (USA).cue
+    # Set LIGA_TEKKEN3_ID in lobby env to the WordPress liga post ID.
+    ligaKey: tekken3
+  - id: street-fighter-3
+    title: Street Fighter 3
+    system: ps1
+    players: 2
+    enabled: true
+    file: Street Fighter Alpha 3 (USA).cue
+    ligaKey: street-fighter-3
+  - id: medal-of-honor
+    title: Medal of Honor
+    system: ps1
+    players: 2
+    enabled: true
+    file: Medal of Honor (Europe).cue
+    ligaKey: medal-of-honor

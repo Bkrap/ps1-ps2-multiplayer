@@ -1,0 +1,3 @@
+#!/usr/bin/with-contenv bash
+# Re-apply Pad 2 viewer video patch (idempotent) in case the base image layer changes.
+python3 /defaults/patch-selkies-pad2.py || true

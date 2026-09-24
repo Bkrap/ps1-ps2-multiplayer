@@ -1,0 +1,19 @@
+[Unit]
+Description=PS1 room lobby
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ps1
+Group=ps1
+SupplementaryGroups=docker
+WorkingDirectory=__ROOT__/lobby
+EnvironmentFile=__ROOT__/.env
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

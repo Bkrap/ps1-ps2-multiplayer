@@ -1,0 +1,10 @@
+{
+  "name": "ps1-multiplayer",
+  "private": true,
+  "scripts": {
+    "start": "bash scripts/run-local.sh",
+    "build": "bash scripts/build-room-image.sh",
+    "preview": "cd lobby && PREVIEW=true REQUIRE_MEDIA=false LIGA_REQUIRE_AUTH=false TLS=false PORT=8791 BIND_HOST=127.0.0.1 node src/index.js",
+    "test": "cd lobby && npm test"
+  }
+}

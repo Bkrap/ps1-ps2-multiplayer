@@ -1,0 +1,15 @@
+{
+  "name": "ps1-lobby",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "start:lan": "bash ../scripts/run-local.sh",
+    "preview": "PREVIEW=true REQUIRE_MEDIA=false LIGA_REQUIRE_AUTH=false TLS=false PORT=8791 BIND_HOST=127.0.0.1 node src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1",
+    "js-yaml": "^4.1.0"
+  }
+}
