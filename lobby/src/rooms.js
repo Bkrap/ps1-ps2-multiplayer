@@ -48,15 +48,35 @@ export class Lobby {
       title: game.title,
       system: game.system,
       players: game.players,
+      ligaSlug: game.ligaSlug || null,
+      ligaId: game.ligaId || null,
     }));
   }
 
-  rankedEnabled() {
-    return Boolean(this.liga?.enabled && this.config.ligaRequireAuth);
+  /** Auth required for create/join when WP sync is configured and LIGA_REQUIRE_AUTH. */
+  authRequired() {
+    if (!this.config.ligaRequireAuth) return false;
+    return Boolean(this.liga?.enabled);
   }
 
-  requireAuthSession(sessionToken) {
-    if (!this.rankedEnabled()) return null;
+  rankedEnabled() {
+    return this.authRequired();
+  }
+
+  /** Ranked start/recording only when the game is wired to a liga. */
+  roomIsRanked(room) {
+    if (!this.rankedEnabled() || room.freeNugget) return false;
+    return Boolean(room.ligaSlug || room.ligaId);
+  }
+
+  requireAuthSession(sessionToken, { freeNugget = false } = {}) {
+    if (freeNugget) return null;
+    if (!this.authRequired()) {
+      if (this.config.ligaRequireAuth && !this.liga?.enabled) {
+        throw new LobbyError(503, "Ranked play needs liga-cms sync (LIGA_WP_*). Use Play Casual instead.");
+      }
+      return null;
+    }
     try {
       return this.auth.require(sessionToken);
     } catch (error) {
@@ -64,17 +84,45 @@ export class Lobby {
     }
   }
 
-  async createRoom({ nickname, gameId, sessionToken }) {
+  ligaRefForGame(game) {
+    if (!game) return { slug: this.config.ligaTekken3Slug || "tekken-3", id: this.config.ligaTekken3Id || 0 };
+    return {
+      slug: game.ligaSlug || (game.id === "tekken3" ? (this.config.ligaTekken3Slug || "tekken-3") : null),
+      id: game.ligaId || (game.id === "tekken3" ? (this.config.ligaTekken3Id || 0) : 0),
+    };
+  }
+
+  async ensureJoinedLiga(session, game) {
+    if (!session?.wpUserId || !this.liga?.enabled) return null;
+    const ref = this.ligaRefForGame(game);
+    if (!ref.slug && !ref.id) return null;
+    const liga = await this.liga.resolveLiga(ref);
+    await this.liga.joinLiga({ ligaId: liga.id, userId: session.wpUserId });
+    return liga;
+  }
+
+  async createRoom({ nickname, gameId, sessionToken, freeNugget = false }) {
+    const session = this.requireAuthSession(sessionToken, { freeNugget });
+    const game = this.games.get(gameId);
+    if (!game) throw new LobbyError(404, "That game is not available.");
+    let ligaMeta = null;
+    if (session && !freeNugget) {
+      try {
+        ligaMeta = await this.ensureJoinedLiga(session, game);
+      } catch (error) {
+        throw new LobbyError(error.status || 502, error.message || "Could not join the league.");
+      }
+    }
     return this.withLock(async () => {
-      const session = this.requireAuthSession(sessionToken);
-      const game = this.games.get(gameId);
-      if (!game) throw new LobbyError(404, "That game is not available.");
       const name = sanitizeNickname(nickname || session?.displayName);
       if (!name) throw new LobbyError(400, "Enter a nickname using letters, numbers, spaces, or hyphens.");
       let code = randomCode();
       for (let attempt = 0; this.rooms.has(code) && attempt < 5; attempt += 1) code = randomCode();
       if (this.rooms.has(code)) throw new LobbyError(503, "Could not open a room. Try again.");
       const token = randomToken();
+      const ligaSlug = ligaMeta?.slug || this.ligaRefForGame(game).slug;
+      const ligaId = ligaMeta?.id || null;
+      const ranked = this.rankedEnabled() && !freeNugget && Boolean(ligaSlug || ligaId);
       const room = {
         code,
         game,
@@ -92,8 +140,11 @@ export class Lobby {
           slot: 1,
           wpUserId: session?.wpUserId || null,
         }],
-        recording: { active: false, required: this.rankedEnabled(), ranked: false },
+        recording: { active: false, required: ranked, ranked: false },
         matchId: null,
+        freeNugget: Boolean(freeNugget),
+        ligaId,
+        ligaSlug,
         _boot: null,
       };
       this.rooms.set(code, room);
@@ -101,9 +152,18 @@ export class Lobby {
     });
   }
 
-  async joinRoom({ code, nickname, sessionToken }) {
+  async joinRoom({ code, nickname, sessionToken, freeNugget = false }) {
+    const roomPeek = this.requireRoom(code);
+    const bypass = freeNugget || Boolean(roomPeek.freeNugget);
+    const session = this.requireAuthSession(sessionToken, { freeNugget: bypass });
+    if (session && !bypass) {
+      try {
+        await this.ensureJoinedLiga(session, roomPeek.game);
+      } catch (error) {
+        throw new LobbyError(error.status || 502, error.message || "Could not join the league.");
+      }
+    }
     return this.withLock(async () => {
-      const session = this.requireAuthSession(sessionToken);
       const room = this.requireRoom(code);
       this.touch(room);
       if (room.status === "ended") throw new LobbyError(410, "This match has ended.");
@@ -163,7 +223,7 @@ export class Lobby {
       if (room.status === "live" || room.status === "starting" || room.status === "queued") {
         return this.memberView(room, token);
       }
-      if (this.rankedEnabled()) {
+      if (this.roomIsRanked(room)) {
         const players = room.members.filter((m) => m.role === "player");
         if (players.length < 2) {
           throw new LobbyError(400, "Both Pad 1 and Pad 2 must join before a ranked match.");
@@ -284,7 +344,7 @@ export class Lobby {
 
       if (room.status !== "live") return;
 
-      if (this.rankedEnabled()) {
+      if (this.roomIsRanked(room)) {
         await this.beginRankedMatch(room);
       }
     } catch (error) {
@@ -328,6 +388,7 @@ export class Lobby {
         }
         try {
           const created = await this.liga.createMatch({
+            ligaId: room.ligaId || undefined,
             homeUserId: pad1.wpUserId,
             awayUserId: pad2.wpUserId,
             roomCode: room.code,
@@ -400,7 +461,9 @@ export class Lobby {
       try {
         if (recordingPath && fs.existsSync(recordingPath)) {
           await this.liga.uploadRecording(matchId, recordingPath, `${room.code}.mp4`);
+          room.recording = { ...(room.recording || {}), uploaded: true, ranked: true };
         } else {
+          room.recording = { ...(room.recording || {}), uploaded: false, ranked: false };
           await this.liga.patchMatch(matchId, {
             status: "cancelled",
             notes: "Recording missing — match does not count.",
@@ -408,6 +471,15 @@ export class Lobby {
         }
       } catch (error) {
         console.error(`liga finish sync failed for ${room.code}:`, error.message);
+        room.recording = { ...(room.recording || {}), uploaded: false, ranked: false };
+        try {
+          await this.liga.patchMatch(matchId, {
+            status: "cancelled",
+            notes: `Recording upload failed — match does not count. (${String(error.message).slice(0, 180)})`,
+          });
+        } catch (patchError) {
+          console.error(`liga cancel after upload fail:`, patchError.message);
+        }
       } finally {
         if (recordingPath) fs.unlink(recordingPath, () => {});
       }
@@ -421,7 +493,9 @@ export class Lobby {
 
   mediaReady(room) {
     if (!this.config.requireMedia) return true;
-    const filePath = path.join(this.config.gamesDir, room.game.file);
+    const system = String(room.game.system || "ps1").toLowerCase();
+    const gamesDir = system === "ps2" ? this.config.gamesDirPs2 : this.config.gamesDir;
+    const filePath = path.join(gamesDir, room.game.file);
     return fs.existsSync(filePath) && fs.statSync(filePath).size > 0;
   }
 
@@ -439,6 +513,36 @@ export class Lobby {
     const member = room.members.find((item) => item.token === token);
     if (!member) throw new LobbyError(403, "That invite is not valid for this room.");
     return member;
+  }
+
+  async getStandingsForGame(gameId) {
+    const game = this.games.get(gameId);
+    if (!game) throw new LobbyError(404, "That game is not available.");
+    const ref = this.ligaRefForGame(game);
+    if (!ref.slug && !ref.id) {
+      return { ligaId: null, slug: null, title: null, rows: [], message: "No league for this game" };
+    }
+    if (!this.liga?.enabled) {
+      return { ligaId: null, slug: ref.slug, title: null, rows: [], message: "League sync is not configured." };
+    }
+    try {
+      return await this.liga.getStandings(ref);
+    } catch (error) {
+      const message = error.message || "Could not load standings.";
+      // Soft-fail for UI: home still renders; table shows why.
+      if (!error.status || error.status >= 500 || /fetch failed|Cannot reach WordPress/i.test(message)) {
+        return {
+          ligaId: null,
+          slug: ref.slug,
+          title: null,
+          rows: [],
+          message: message.includes("Cannot reach")
+            ? message
+            : `Standings unavailable (${message}). Check MAMP / liga-cms.`,
+        };
+      }
+      throw new LobbyError(error.status || 502, message);
+    }
   }
 
   memberView(room, token) {
@@ -469,11 +573,15 @@ export class Lobby {
       canStream: room.status === "live" && Boolean(room.hostPort),
       recording: {
         active: Boolean(room.recording?.active),
-        required: Boolean(room.recording?.required ?? this.rankedEnabled()),
+        required: Boolean(room.recording?.required ?? this.roomIsRanked(room)),
         ranked: Boolean(room.recording?.ranked),
+        uploaded: Boolean(room.recording?.uploaded),
       },
       matchId: room.matchId || null,
-      rankedRequired: this.rankedEnabled(),
+      rankedRequired: this.roomIsRanked(room),
+      freeNugget: Boolean(room.freeNugget),
+      ligaId: room.ligaId || null,
+      ligaSlug: room.ligaSlug || null,
       token,
     };
   }

@@ -16,12 +16,19 @@ export function loadCatalog(catalogPath) {
       if (!game.file || /[\\/]/.test(String(game.file)) || String(game.file).includes("..")) {
         throw new Error(`Invalid game file for ${game.id}`);
       }
+      const system = String(game.system || "ps1").toLowerCase();
+      if (system !== "ps1" && system !== "ps2") {
+        throw new Error(`Invalid system for ${game.id}: use ps1 or ps2`);
+      }
       return {
         id: String(game.id),
         title: String(game.title || game.id),
-        system: String(game.system || "ps1"),
+        system,
         players: game.players,
         file: String(game.file),
+        ligaSlug: game.ligaSlug ? String(game.ligaSlug) : null,
+        ligaId: Number.isInteger(game.ligaId) ? game.ligaId : null,
+        ligaKey: game.ligaKey ? String(game.ligaKey) : null,
       };
     });
 }

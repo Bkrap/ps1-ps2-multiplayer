@@ -34,20 +34,27 @@ export function createDockerRunner(config) {
       await this.ensureNetwork();
       // Leftover containers from a killed lobby block `docker run --name`.
       await run("docker", ["rm", "-f", room.containerName]).catch(() => {});
+      const system = String(room.game.system || "ps1").toLowerCase();
+      const isPs2 = system === "ps2";
+      const gamesDir = isPs2 ? config.gamesDirPs2 : config.gamesDir;
+      const biosDir = isPs2 ? config.biosDirPs2 : config.biosDir;
+      const cpus = isPs2 ? config.roomCpusPs2 : config.roomCpus;
+      const memory = isPs2 ? config.roomMemoryPs2 : config.roomMemory;
       const args = [
         "run", "-d",
         "--name", room.containerName,
         "--network", config.dockerNetwork,
-        "--cpus", String(config.roomCpus),
-        "--memory", String(config.roomMemory),
+        "--cpus", String(cpus),
+        "--memory", String(memory),
         "--shm-size", "1g",
         "--security-opt", "no-new-privileges:true",
         // Lobby runs on the host, so publish the stream port on localhost.
         "-p", "127.0.0.1::3000",
         "--label", "ps1.room=1",
         "--label", `ps1.code=${room.code}`,
-        "-v", `${config.gamesDir}:/games:ro`,
-        "-v", `${config.biosDir}:/bios:ro`,
+        "-v", `${gamesDir}:/games:ro,z`,
+        "-v", `${biosDir}:/bios:ro,z`,
+        "-e", `GAME_SYSTEM=${system}`,
         "-e", `GAME_FILE=${room.game.file}`,
         "-e", `SELKIES_MASTER_TOKEN=${room.masterToken}`,
         "-e", `SUBFOLDER=/streams/${room.code}/`,
@@ -71,7 +78,7 @@ export function createDockerRunner(config) {
     },
 
     async waitReady(room) {
-      // Nginx answers on :3000 before Selkies opens the token API on :8083.
+      // Nginx answers on :3000 before Selkies opens the token API.
       // Wait for a successful token push, not just the HTML page.
       const deadline = Date.now() + 120000;
       let lastError = "match container did not open its stream control port";
@@ -92,9 +99,11 @@ export function createDockerRunner(config) {
     },
 
     async pushTokens(room, body) {
+      // Selkies 2.x: control plane is :8082 under SUBFOLDER (/streams/{code}/api/tokens).
+      const tokensUrl = `http://127.0.0.1:8082/streams/${room.code}/api/tokens`;
       await run("docker", [
         "exec", "-i", room.containerName,
-        "curl", "-fsS", "-X", "POST", "http://127.0.0.1:8083/tokens",
+        "curl", "-fsS", "-X", "POST", tokensUrl,
         "-H", `Authorization: Bearer ${room.masterToken}`,
         "-H", "Content-Type: application/json",
         "--data-binary", "@-",

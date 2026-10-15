@@ -26,9 +26,11 @@ fi
 # Give the desktop a moment after DuckStation fullscreen.
 sleep 2
 
+# Keep files under typical local PHP upload caps (was ~45MB for short matches).
 ffmpeg -y -loglevel error \
-  -f x11grab -video_size "${WIDTH}x${HEIGHT}" -framerate 30 -i "${DISPLAY}.0" \
-  -c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p \
+  -f x11grab -video_size "${WIDTH}x${HEIGHT}" -framerate 20 -i "${DISPLAY}.0" \
+  -c:v libx264 -preset veryfast -crf 32 -pix_fmt yuv420p \
+  -movflags +faststart \
   -an "$OUT" </dev/null >/tmp/ps1-record.log 2>&1 &
 echo $! > "$PIDFILE"
 sleep 1

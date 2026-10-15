@@ -9,10 +9,30 @@ document.body.append(live);
 const sessionKey = "ps1-room-session";
 const lobbyAuthKey = "ps1-lobby-auth";
 const padReadyKey = "ps1-pad-ready";
+const playModeKey = "ps1-play-mode";
 
 let controllerBar = null;
 let focusKeepAlive = null;
 let rankedRequired = true;
+let authRequired = true;
+let rankedAvailable = false;
+let rankedPlayable = false;
+let freeNugget = false;
+let homeGames = [];
+let standingsCache = { gameId: "", payload: null };
+
+function playMode() {
+  try {
+    return sessionStorage.getItem(playModeKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setPlayMode(mode) {
+  if (!mode) sessionStorage.removeItem(playModeKey);
+  else sessionStorage.setItem(playModeKey, mode);
+}
 
 function say(message) {
   live.textContent = message;
@@ -162,7 +182,7 @@ function authBarHtml() {
   }
   return `<section class="panel auth-bar">
     <h2 class="panel-title">Register to play</h2>
-    <p class="hint">Both Pad 1 and Pad 2 need a liga.gamer.free account before a ranked match.</p>
+    <p class="hint">Register or log in to join the ranked league before you create or join a room.</p>
     <div class="auth-grid">
       <form id="register">
         <label>Display name <input name="displayName" required maxlength="24" autocomplete="nickname"></label>
@@ -201,6 +221,7 @@ function wireAuthBar() {
             displayName: data.get("displayName"),
             email: data.get("email"),
             password: data.get("password"),
+            gameId: homeGames[0]?.id || "tekken3",
           }),
         });
         saveLobbyAuth(auth);
@@ -222,6 +243,7 @@ function wireAuthBar() {
           body: JSON.stringify({
             email: data.get("email"),
             password: data.get("password"),
+            gameId: homeGames[0]?.id || "tekken3",
           }),
         });
         saveLobbyAuth(auth);
@@ -234,21 +256,139 @@ function wireAuthBar() {
   }
 }
 
-function renderHome(games, error) {
+function standingsHtml(payload, highlightUserId) {
+  if (!payload) return "";
+  if (payload.message && (!payload.rows || !payload.rows.length)) {
+    return `<section class="panel standings-panel">
+      <h2 class="panel-title">Standings</h2>
+      <p class="hint">${escapeHtml(payload.message)}</p>
+    </section>`;
+  }
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const title = payload.title || "Standings";
+  if (!rows.length) {
+    return `<section class="panel standings-panel">
+      <h2 class="panel-title">${escapeHtml(title)}</h2>
+      <p class="hint">No played matches yet.</p>
+    </section>`;
+  }
+  const body = rows.map((row) => {
+    const me = highlightUserId && row.userId === highlightUserId;
+    return `<tr class="${me ? "is-me" : ""}">
+      <td>${escapeHtml(row.rank)}</td>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${escapeHtml(row.played)}</td>
+      <td>${escapeHtml(row.won)}</td>
+      <td>${escapeHtml(row.drawn)}</td>
+      <td>${escapeHtml(row.lost)}</td>
+      <td>${escapeHtml(row.gd)}</td>
+      <td>${escapeHtml(row.pts)}</td>
+    </tr>`;
+  }).join("");
+  return `<section class="panel standings-panel">
+    <h2 class="panel-title">${escapeHtml(title)}</h2>
+    <div class="standings-wrap">
+      <table class="standings">
+        <thead>
+          <tr><th>#</th><th>Player</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GD</th><th>Pts</th></tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>
+  </section>`;
+}
+
+async function loadStandings(gameId) {
+  if (!gameId) return { message: "No league for this game", rows: [] };
+  const game = homeGames.find((item) => item.id === gameId);
+  if (game && !game.ligaSlug && !game.ligaId) {
+    return { message: "No league for this game", rows: [] };
+  }
+  try {
+    return await api(`/api/standings?gameId=${encodeURIComponent(gameId)}`);
+  } catch (err) {
+    return { message: err.message || "Could not load standings.", rows: [] };
+  }
+}
+
+function setHomeChrome(gameId) {
+  const game = homeGames.find((item) => item.id === gameId) || homeGames[0];
+  const name = game?.title || "PS1 / PS2";
+  const mode = playMode();
+  if (!mode) {
+    title.textContent = "Play together";
+    lede.textContent = "Casual needs no account. Ranked needs a working liga-cms sync (not available in public forks).";
+    return;
+  }
+  title.textContent = mode === "ranked" ? `Ranked · ${name}` : `Casual · ${name}`;
+  lede.textContent = mode === "ranked"
+    ? `Register or log in with liga-cms, then create a room for ${name}.`
+    : `Create a room for ${name}, share the code, and both players use their own gamepad. No login.`;
+}
+
+function renderModePicker(error) {
   stopControllerBar();
-  const auth = lobbyAuth();
-  title.textContent = "Play Tekken 3 together";
-  lede.textContent = rankedRequired
-    ? "Register to play, create a room, and both pads drive the ranked league match. The match is recorded on the server for admin review."
-    : "Create a room, share the code, and both players use their own gamepad.";
-  const options = games.map((game) => `<option value="${escapeHtml(game.id)}">${escapeHtml(game.title)}</option>`).join("");
-  const locked = rankedRequired && !auth;
+  setHomeChrome();
   app.innerHTML = `
-    ${authBarHtml()}
+    <section class="panel mode-picker">
+      <h2 class="panel-title">Choose how to play</h2>
+      <p class="hint">Ranked records matches into liga-cms and requires that WordPress stack plus secrets. Public forks will not meet those requirements — use Casual.</p>
+      <div class="mode-actions">
+        <button type="button" id="play-ranked" disabled aria-disabled="true" title="${rankedAvailable ? "Ranked UI locked — liga-cms alone is not enough for public forks" : "Ranked requires liga-cms sync secrets (not configured)"}">Play ranked</button>
+        <button type="button" id="play-casual">Play casual</button>
+      </div>
+      ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
+    </section>
+  `;
+  app.querySelector("#play-casual")?.addEventListener("click", async () => {
+    try {
+      const response = await fetch("/api/mode/casual", { method: "POST" });
+      if (!response.ok) throw new Error("Could not start casual mode.");
+      setPlayMode("casual");
+      freeNugget = true;
+      authRequired = false;
+      rankedRequired = false;
+      show();
+    } catch (err) {
+      renderModePicker(err.message);
+      say(err.message);
+    }
+  });
+}
+
+async function refreshHomeStandings(gameId) {
+  setHomeChrome(gameId);
+  const next = await loadStandings(gameId);
+  standingsCache = { gameId, payload: next };
+  const tableHost = app.querySelector(".standings-panel");
+  if (tableHost) {
+    const wrap = document.createElement("div");
+    wrap.innerHTML = standingsHtml(next, lobbyAuth()?.wpUserId);
+    const node = wrap.firstElementChild;
+    if (node) tableHost.replaceWith(node);
+  }
+  return next;
+}
+
+function renderHome(games, error, standings) {
+  stopControllerBar();
+  homeGames = games;
+  const auth = lobbyAuth();
+  const casual = playMode() === "casual" || freeNugget;
+  const locked = !casual && authRequired && !auth;
+  const selectedId = standingsCache.gameId || games[0]?.id || "tekken3";
+  setHomeChrome(selectedId);
+  const options = games.map((game) => {
+    const selected = game.id === selectedId ? " selected" : "";
+    return `<option value="${escapeHtml(game.id)}"${selected}>${escapeHtml(game.title)}</option>`;
+  }).join("");
+  app.innerHTML = `
+    <p class="hint mode-back"><button type="button" class="secondary" id="change-mode">Change mode</button></p>
+    ${casual ? "" : authBarHtml()}
     <section class="panel" ${locked ? "hidden" : ""}>
       <form id="create">
         <label>Nickname <input name="nickname" required maxlength="24" autocomplete="nickname" value="${escapeHtml(auth?.displayName || "")}"></label>
-        <label>Game <select name="gameId">${options}</select></label>
+        <label>Game <select name="gameId" id="home-game">${options}</select></label>
         <button type="submit">Create room</button>
       </form>
     </section>
@@ -259,10 +399,27 @@ function renderHome(games, error) {
         <button type="submit">Join room</button>
       </form>
     </section>
-    ${locked ? `<p class="hint">Register or log in above to create or join a ranked room.</p>` : ""}
+    ${locked ? `<p class="hint">Register or log in above to create or join a ranked room. Forks without liga-cms cannot do this.</p>` : ""}
+    ${casual ? "" : standingsHtml(standings, auth?.wpUserId)}
     ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
   `;
-  wireAuthBar();
+  app.querySelector("#change-mode")?.addEventListener("click", async () => {
+    setPlayMode("");
+    try {
+      await fetch("/api/mode/ranked", { method: "POST" });
+    } catch {
+      // ignore — picker still works
+    }
+    freeNugget = false;
+    show();
+  });
+  if (!casual) wireAuthBar();
+  const gameSelect = app.querySelector("#home-game");
+  if (gameSelect) {
+    gameSelect.addEventListener("change", () => {
+      refreshHomeStandings(gameSelect.value).catch((err) => say(err.message));
+    });
+  }
   const create = app.querySelector("#create");
   if (create) {
     create.addEventListener("submit", async (event) => {
@@ -276,7 +433,7 @@ function renderHome(games, error) {
         saveSession({ code: room.code, token: room.token });
         location.hash = `#/room/${room.code}`;
       } catch (err) {
-        renderHome(games, err.message);
+        renderHome(games, err.message, standingsCache.payload);
         say(err.message);
       }
     });
@@ -295,7 +452,7 @@ function renderHome(games, error) {
         saveSession({ code: room.code, token: room.token });
         location.hash = `#/room/${room.code}`;
       } catch (err) {
-        renderHome(games, err.message);
+        renderHome(games, err.message, standingsCache.payload);
         say(err.message);
       }
     });
@@ -315,6 +472,7 @@ function roomSignature(room) {
     you: room.you,
     recording: room.recording,
     matchId: room.matchId,
+    ligaId: room.ligaId,
   });
 }
 
@@ -336,14 +494,17 @@ function recordingBadge(room) {
   if (room.status === "live" && !room.recording.ranked) {
     return `<p class="record-badge warn" role="status">Not ranked — recording failed</p>`;
   }
-  if (room.status === "ended" && room.recording.ranked) {
+  if (room.status === "ended" && room.recording.uploaded) {
     return `<p class="record-badge" role="status">Recording sent for league review</p>`;
+  }
+  if (room.status === "ended" && room.recording.required && !room.recording.uploaded) {
+    return `<p class="record-badge warn" role="status">Recording did not reach the league</p>`;
   }
   return "";
 }
 
-function renderRoom(room) {
-  const signature = roomSignature(room);
+function renderRoom(room, standings) {
+  const signature = roomSignature(room) + JSON.stringify(standings?.rows?.length ?? standings?.message ?? "");
   if (signature === painted && app.querySelector("#stage")) {
     const badge = app.querySelector(".record-badge");
     if (badge && room.recording?.active) badge.classList.add("active");
@@ -375,6 +536,7 @@ function renderRoom(room) {
       </div>
       ${room.error ? `<p class="error" role="alert">${escapeHtml(room.error)}</p>` : ""}
     </section>
+    ${standingsHtml(standings, lobbyAuth()?.wpUserId || room.you?.wpUserId)}
     ${padPanel(room)}
     <section class="panel stage-panel" id="stage" ${room.canStream ? "" : "hidden"}>
       <div class="actions">
@@ -417,7 +579,7 @@ function renderRoom(room) {
           headers: { authorization: `Bearer ${current.token}` },
           body: "{}",
         });
-        renderRoom(next);
+        renderRoom(next, standings);
       } catch (err) {
         say(err.message);
       }
@@ -501,7 +663,8 @@ async function startMatch(code) {
       headers: { authorization: `Bearer ${current.token}` },
       body: "{}",
     });
-    renderRoom(room);
+    const standings = await loadStandings(room.game.id);
+    renderRoom(room, standings);
   } catch (err) {
     say(err.message);
   }
@@ -516,7 +679,33 @@ async function show() {
     try {
       const payload = await api("/api/games");
       rankedRequired = Boolean(payload.rankedRequired);
-      renderHome(payload.games, "");
+      authRequired = Boolean(payload.authRequired ?? payload.rankedRequired);
+      rankedAvailable = Boolean(payload.rankedAvailable);
+      rankedPlayable = Boolean(payload.rankedPlayable);
+      freeNugget = Boolean(payload.freeNugget);
+      homeGames = payload.games;
+      const mode = playMode();
+      // First screen: mode picker. Ranked stays disabled for forks.
+      if (!mode || (mode === "ranked" && !rankedPlayable)) {
+        if (mode === "ranked") setPlayMode("");
+        renderModePicker();
+        return;
+      }
+      const gameId = payload.games[0]?.id || "tekken3";
+      // Paint UI first — standings must not block home forever if WP is slow.
+      renderHome(payload.games, "", standingsCache.gameId === gameId ? standingsCache.payload : null);
+      if (mode === "casual") return;
+      const standings = await loadStandings(gameId);
+      standingsCache = { gameId, payload: standings };
+      const tableHost = app.querySelector(".standings-panel");
+      if (tableHost) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = standingsHtml(standings, lobbyAuth()?.wpUserId);
+        const node = wrap.firstElementChild;
+        if (node) tableHost.replaceWith(node);
+      } else {
+        renderHome(payload.games, "", standings);
+      }
     } catch (err) {
       app.innerHTML = `<p class="error" role="alert">${escapeHtml(err.message)}</p>`;
     }
@@ -531,7 +720,14 @@ async function show() {
     const room = await api(`/api/rooms/${current.code}`, {
       headers: { authorization: `Bearer ${current.token}` },
     });
-    renderRoom(room);
+    renderRoom(room, standingsCache.gameId === room.game.id ? standingsCache.payload : null);
+    const standings = standingsCache.gameId === room.game.id && standingsCache.payload
+      ? standingsCache.payload
+      : await loadStandings(room.game.id);
+    standingsCache = { gameId: room.game.id, payload: standings };
+    if (app.querySelector(".standings-panel") || standings) {
+      renderRoom(room, standings);
+    }
   } catch (err) {
     clearSession();
     location.hash = "#/";

@@ -23,7 +23,7 @@ timer.unref();
 const scheme = tls ? "https" : "http";
 server.listen(config.port, config.bindHost, () => {
   console.log(`lobby listening on ${scheme}://${config.bindHost}:${config.port}`);
-  if (liga.enabled) console.log(`liga sync: ${config.ligaWpUrl} (liga id ${config.ligaTekken3Id})`);
+  if (liga.enabled) console.log(`liga sync: ${config.ligaWpUrl} (slug ${config.ligaTekken3Slug || "tekken-3"})`);
   else if (config.ligaRequireAuth) console.log("liga sync: disabled (set LIGA_WP_* env to enable ranked play)");
   if (tls?.ips?.length) {
     for (const ip of tls.ips) {

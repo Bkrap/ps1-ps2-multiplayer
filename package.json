@@ -1,5 +1,5 @@
 {
-  "name": "ps1-multiplayer",
+  "name": "ps1-ps2-multiplayer",
   "private": true,
   "scripts": {
     "start": "bash scripts/run-local.sh",

@@ -5,6 +5,7 @@ set -euo pipefail
 BIOS_DIR="${BIOS_DIR:-/bios}"
 GAMES_DIR="${GAMES_DIR:-/games}"
 GAME_FILE="${GAME_FILE:-}"
+GAME_SYSTEM="${GAME_SYSTEM:-ps1}"
 
 fail() {
   echo "ps1-room: $*" >&2
@@ -12,7 +13,7 @@ fail() {
 }
 
 if [[ ! -d "$BIOS_DIR" ]]; then
-  fail "PS1 BIOS directory is missing. Mount your own dumped BIOS at ${BIOS_DIR}."
+  fail "BIOS directory is missing. Mount dumped BIOS at ${BIOS_DIR}."
 fi
 
 bios_found=0
@@ -24,7 +25,7 @@ while IFS= read -r -d '' bios_file; do
 done < <(find "$BIOS_DIR" -type f -print0 2>/dev/null || true)
 
 if [[ "$bios_found" -ne 1 ]]; then
-  fail "PS1 BIOS directory is empty. Copy your own dumped BIOS into ${BIOS_DIR} and start again."
+  fail "BIOS directory is empty. Copy your own dumped BIOS into ${BIOS_DIR} and start again."
 fi
 
 if [[ -z "$GAME_FILE" ]]; then
@@ -40,6 +41,30 @@ if [[ ! -f "$game_path" || ! -s "$game_path" ]]; then
   fail "Game image is missing (${GAME_FILE}). Place your own disc image in the games directory."
 fi
 
+system="$(printf '%s' "$GAME_SYSTEM" | tr '[:upper:]' '[:lower:]')"
+
+if [[ "$system" == "ps2" ]]; then
+  shopt -s nocasematch
+  case "$GAME_FILE" in
+    *.iso|*.chd) ;;
+    *)
+      shopt -u nocasematch
+      fail "PS2 GAME_FILE must be an .iso or .chd (${GAME_FILE})."
+      ;;
+  esac
+  shopt -u nocasematch
+  # PCSX2 needs 2048-byte ISO sectors. Raw 2448 dumps look like a disc with no game.
+  if [[ "$GAME_FILE" == *.iso || "$GAME_FILE" == *.ISO ]]; then
+    bytes=$(wc -c < "$game_path" | tr -d ' ')
+    if [[ "$((bytes % 2048))" -ne 0 ]]; then
+      fail "PS2 ISO sector size is not 2048 (file size ${bytes}). Convert raw 2448 dumps before use."
+    fi
+  fi
+  echo "ps1-room: media check ok (ps2 ${GAME_FILE})"
+  exit 0
+fi
+
+# PS1 (default): cue sheets must reference sibling bins in the games dir.
 shopt -s nocasematch
 if [[ "$GAME_FILE" == *.cue ]]; then
   shopt -u nocasematch

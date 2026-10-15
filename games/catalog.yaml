@@ -7,8 +7,8 @@ games:
     players: 2
     enabled: true
     file: Tekken 3 (USA).cue
-    # Set LIGA_TEKKEN3_ID in lobby env to the WordPress liga post ID.
     ligaKey: tekken3
+    ligaSlug: tekken-3
   - id: street-fighter-3
     title: Street Fighter 3
     system: ps1
@@ -23,3 +23,33 @@ games:
     enabled: true
     file: Medal of Honor (Europe).cue
     ligaKey: medal-of-honor
+  - id: fifa-2002
+    title: FIFA 2002
+    system: ps1
+    players: 2
+    enabled: true
+    file: FIFA Football 2002.cue
+    ligaKey: fifa-2002
+    ligaSlug: fifa-2002
+  - id: pes-2002
+    title: PES 2002
+    system: ps1
+    players: 2
+    enabled: true
+    file: Pro Evolution Soccer 2 (Europe) (Es,It).cue
+    ligaKey: pes-2002
+    ligaSlug: pes-2002
+  # PS2: put the ISO/CHD in GAMES_DIR_PS2 (default ~/ps1-rooms/games-ps2), BIOS in BIOS_DIR_PS2.
+  # Set enabled: true and the exact filename once media is on the host.
+  - id: ride-or-die
+    title: 187 - Ride or Die.iso
+    system: ps2
+    players: 2
+    enabled: true
+    file: 187 - Ride or Die.iso
+  - id: pes-6
+    title: Pro Evolution Soccer 6
+    system: ps2
+    players: 2
+    enabled: true
+    file: Pro Evolution Soccer 6 (Europe).iso

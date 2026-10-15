@@ -95,6 +95,22 @@ function streamCookie(code, token, secure) {
   return flags.join("; ");
 }
 
+function freeNuggetBypass(req) {
+  return parseCookies(req).ps1_free_nugget === "1";
+}
+
+function freeNuggetCookie(secure, { clear = false } = {}) {
+  const flags = [
+    clear ? "ps1_free_nugget=" : "ps1_free_nugget=1",
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    clear ? "Max-Age=0" : "Max-Age=86400",
+  ];
+  if (secure) flags.push("Secure");
+  return flags.join("; ");
+}
+
 function streamParts(pathname) {
   const match = pathname.match(/^\/streams\/([A-Za-z0-9]+)(\/.*)?$/);
   if (!match) return null;
@@ -131,6 +147,13 @@ export function createServer({ lobby, config, tls, auth, liga }) {
     return req.headers["x-lobby-session"]
       || body.sessionToken
       || "";
+  }
+
+  async function autoJoinDefaultLiga(session, gameId) {
+    if (!session?.wpUserId || !lobby.ensureJoinedLiga) return;
+    const game = lobby.games.get(gameId) || lobby.games.get("tekken3") || [...lobby.games.values()][0];
+    if (!game) return;
+    await lobby.ensureJoinedLiga(session, game);
   }
 
   const onRequest = async (req, res) => {
@@ -173,21 +196,61 @@ export function createServer({ lobby, config, tls, auth, liga }) {
           : filePath.endsWith(".js")
             ? "text/javascript; charset=utf-8"
             : "text/html; charset=utf-8";
-        res.writeHead(200, { ...SAFE_HEADERS, "content-type": type, "cache-control": "no-store" });
+        const headers = { ...SAFE_HEADERS, "content-type": type, "cache-control": "no-store" };
+        if ((url.pathname === "/" || url.pathname === "/index.html")
+          && url.searchParams.get("free_nugget") === "1") {
+          headers["set-cookie"] = freeNuggetCookie(secure);
+        }
+        res.writeHead(200, headers);
         res.end(body);
         return;
       }
 
       if (req.method === "GET" && url.pathname === "/api/games") {
+        const nugget = freeNuggetBypass(req);
+        const rankedAvailable = lobby.rankedEnabled();
         sendJson(res, 200, {
           games: lobby.listGames(),
-          rankedRequired: lobby.rankedEnabled(),
+          rankedRequired: nugget ? false : rankedAvailable,
+          authRequired: nugget ? false : lobby.authRequired(),
+          rankedAvailable,
+          // Forks without liga-cms secrets cannot satisfy ranked auth.
+          rankedPlayable: false,
+          freeNugget: nugget,
         });
         return;
       }
 
+      // Casual lobby: no liga login. Sets the free-play cookie used by create/join.
+      if (req.method === "POST" && url.pathname === "/api/mode/casual") {
+        res.writeHead(204, {
+          ...SAFE_HEADERS,
+          "set-cookie": freeNuggetCookie(secure),
+          "cache-control": "no-store",
+        });
+        res.end();
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/mode/ranked") {
+        // Ranked UI stays disabled for forks; clearing casual cookie only.
+        res.writeHead(204, {
+          ...SAFE_HEADERS,
+          "set-cookie": freeNuggetCookie(secure, { clear: true }),
+          "cache-control": "no-store",
+        });
+        res.end();
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/standings") {
+        const gameId = url.searchParams.get("gameId") || "tekken3";
+        sendJson(res, 200, await lobby.getStandingsForGame(gameId));
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/api/auth/register") {
-        if (!liga) throw new LobbyError(503, "League sync is not configured.");
+        if (!liga?.enabled) throw new LobbyError(503, "League sync is not configured. Set LIGA_WP_* in lobby/.env.liga.");
         const body = await readBody(req);
         const result = await liga.register({
           email: body.email,
@@ -199,6 +262,11 @@ export function createServer({ lobby, config, tls, auth, liga }) {
           displayName: result.displayName,
           email: result.login,
         });
+        try {
+          await autoJoinDefaultLiga(session, body.gameId);
+        } catch (error) {
+          console.error("liga auto-join after register:", error.message);
+        }
         sendJson(res, 201, {
           sessionToken: session.token,
           wpUserId: session.wpUserId,
@@ -209,7 +277,7 @@ export function createServer({ lobby, config, tls, auth, liga }) {
       }
 
       if (req.method === "POST" && url.pathname === "/api/auth/login") {
-        if (!liga) throw new LobbyError(503, "League sync is not configured.");
+        if (!liga?.enabled) throw new LobbyError(503, "League sync is not configured. Set LIGA_WP_* in lobby/.env.liga.");
         const body = await readBody(req);
         const result = await liga.login({
           email: body.email,
@@ -220,6 +288,11 @@ export function createServer({ lobby, config, tls, auth, liga }) {
           displayName: result.displayName,
           email: result.login,
         });
+        try {
+          await autoJoinDefaultLiga(session, body.gameId);
+        } catch (error) {
+          console.error("liga auto-join after login:", error.message);
+        }
         sendJson(res, 200, {
           sessionToken: session.token,
           wpUserId: session.wpUserId,
@@ -251,6 +324,7 @@ export function createServer({ lobby, config, tls, auth, liga }) {
           nickname: body.nickname,
           gameId: body.gameId,
           sessionToken: lobbySession(req, body),
+          freeNugget: freeNuggetBypass(req),
         }));
         return;
       }
@@ -269,6 +343,7 @@ export function createServer({ lobby, config, tls, auth, liga }) {
             code,
             nickname: body.nickname,
             sessionToken: lobbySession(req, body),
+            freeNugget: freeNuggetBypass(req),
           }));
           return;
         }

@@ -1,5 +1,5 @@
-# One match: headless Selkies desktop + DuckStation kiosk.
-# The disc image and BIOS are mounted at runtime. They are not in this image.
+# One match: headless Selkies desktop + DuckStation (PS1) or PCSX2 (PS2) kiosk.
+# Disc images and BIOS are mounted at runtime. They are not in this image.
 FROM ghcr.io/linuxserver/baseimage-selkies:debiantrixie
 
 ENV TITLE="Match" \
@@ -38,8 +38,9 @@ ENV TITLE="Match" \
     SELKIES_AUDIO_ENABLED=true
 
 ARG DUCKSTATION_URL=https://github.com/stenzek/duckstation/releases/download/latest/DuckStation-x64.AppImage
+ARG PCSX2_URL=https://github.com/PCSX2/pcsx2/releases/download/v2.2.0/pcsx2-v2.2.0-linux-appimage-x64-Qt.AppImage
 # Bump to invalidate apt cache when window helpers change.
-ARG ROOM_HELPERS=5
+ARG ROOM_HELPERS=6
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates wmctrl xdotool ffmpeg \
@@ -50,7 +51,14 @@ RUN apt-get update \
     && rm -rf /opt/duckstation \
     && mv /tmp/squashfs-root /opt/duckstation \
     && rm -f /tmp/duckstation.AppImage \
-    && chmod +x /opt/duckstation/AppRun
+    && chmod +x /opt/duckstation/AppRun \
+    && curl -fsSL -o /tmp/pcsx2.AppImage "$PCSX2_URL" \
+    && chmod +x /tmp/pcsx2.AppImage \
+    && cd /tmp && ./pcsx2.AppImage --appimage-extract \
+    && rm -rf /opt/pcsx2 \
+    && mv /tmp/squashfs-root /opt/pcsx2 \
+    && rm -f /tmp/pcsx2.AppImage \
+    && chmod +x /opt/pcsx2/AppRun
 
 COPY root/ /
 RUN chmod 755 /defaults/require-media.sh /defaults/launch-game.sh /defaults/maximize-game.sh /defaults/record-start.sh /defaults/record-stop.sh /defaults/patch-selkies-pad2.py /custom-cont-init.d/10-require-media /custom-cont-init.d/20-patch-selkies-pad2 \

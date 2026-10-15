@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+lobby/node_modules/
+
+# Secrets / local env (copy from examples — never commit filled values)
+.env
+.env.*
+!.env*.example
+!lobby/env.liga.example
+lobby/.env.liga
+
+# TLS material generated locally
+certs/*.pem
+lobby/certs/*.pem
+lobby/certs/san.txt
+
+# Emulator dumps / ROMs (put these under ~/ps1-rooms — see README)
+bios/
+bios-ps2/
+games/*.bin
+games/*.BIN
+games/*.cue
+games/*.iso
+games/*.chd
+games/*.img
+games-ps2/
+*.BIN
+SCPH*.bin
+SCPH*.BIN
+
+# Build / OS noise
+*.log
+.DS_Store
+__pycache__/
+*.pyc
+lobby/.room-image-stamp
+room-image/root/defaults/__pycache__/

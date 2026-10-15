@@ -3,25 +3,38 @@ import { File } from "node:buffer";
 import crypto from "node:crypto";
 
 /**
- * WordPress liga.gamer.free sync client.
- * Uses Application Password Basic auth for match mutations;
- * register/login hit public liga/v1 routes.
+ * WordPress liga-cms sync client (headless liga/v1).
+ * Mutations use either Application Password (Basic) or local sync secret header.
+ * register/login/standings/ligas are public.
  */
 export function createLigaClient(config) {
   const base = String(config.ligaWpUrl || "").replace(/\/$/, "");
   const user = config.ligaWpUser || "";
   const pass = config.ligaWpAppPassword || "";
-  const enabled = Boolean(base && user && pass && config.ligaTekken3Id);
+  const syncSecret = String(config.ligaWpSyncSecret || "").trim();
+  const hasBasic = Boolean(base && user && pass);
+  const hasSecret = Boolean(base && syncSecret);
+  const defaultSlug = String(config.ligaTekken3Slug || "tekken-3");
+  const defaultId = Number(config.ligaTekken3Id) || 0;
+  // Enabled when WP URL + (Application Password OR local sync secret).
+  const enabled = hasBasic || hasSecret;
 
-  function authHeader() {
-    const token = Buffer.from(`${user}:${pass}`, "utf8").toString("base64");
-    return `Basic ${token}`;
+  const ligaCache = new Map();
+
+  function applyAuth(headers) {
+    if (syncSecret) {
+      headers["x-liga-sync-secret"] = syncSecret;
+      return;
+    }
+    if (user && pass) {
+      headers.authorization = `Basic ${Buffer.from(`${user}:${pass}`, "utf8").toString("base64")}`;
+    }
   }
 
   async function request(path, { method = "GET", body, auth = false, formData } = {}) {
     if (!base) throw new Error("Liga WordPress URL is not configured.");
     const headers = {};
-    if (auth) headers.authorization = authHeader();
+    if (auth) applyAuth(headers);
     let payload;
     if (formData) {
       payload = formData;
@@ -29,7 +42,13 @@ export function createLigaClient(config) {
       headers["content-type"] = "application/json";
       payload = JSON.stringify(body);
     }
-    const response = await fetch(`${base}/wp-json${path}`, { method, headers, body: payload });
+    const response = await fetch(`${base}/wp-json${path}`, { method, headers, body: payload }).catch((error) => {
+      const err = new Error(
+        `Cannot reach WordPress at ${base} (${error.message}). Is MAMP running on :8888?`,
+      );
+      err.status = 502;
+      throw err;
+    });
     const text = await response.text();
     let data = {};
     try {
@@ -48,7 +67,8 @@ export function createLigaClient(config) {
 
   return {
     enabled,
-    ligaId: Number(config.ligaTekken3Id) || 0,
+    defaultSlug,
+    defaultId,
 
     async register({ email, password, displayName }) {
       return request("/liga/v1/register", {
@@ -64,12 +84,61 @@ export function createLigaClient(config) {
       });
     },
 
-    async createMatch({ homeUserId, awayUserId, roomCode, status = "scheduled", notes = "" }) {
+    async resolveLiga({ slug, id } = {}) {
+      const ligaId = Number(id) || 0;
+      const ligaSlug = String(slug || "").trim();
+      const cacheKey = ligaId ? `id:${ligaId}` : `slug:${ligaSlug || defaultSlug}`;
+      if (ligaCache.has(cacheKey)) return ligaCache.get(cacheKey);
+
+      let data;
+      if (ligaId) {
+        data = await request(`/liga/v1/ligas?id=${ligaId}`);
+      } else {
+        data = await request(`/liga/v1/ligas?slug=${encodeURIComponent(ligaSlug || defaultSlug)}`);
+      }
+      ligaCache.set(cacheKey, data);
+      if (data?.id) ligaCache.set(`id:${data.id}`, data);
+      if (data?.slug) ligaCache.set(`slug:${data.slug}`, data);
+      return data;
+    },
+
+    async joinLiga({ ligaId, userId }) {
+      return request(`/liga/v1/ligas/${ligaId}/join`, {
+        method: "POST",
+        auth: true,
+        body: { userId },
+      });
+    },
+
+    async getStandings({ slug, ligaId } = {}) {
+      const params = new URLSearchParams();
+      if (ligaId) params.set("ligaId", String(ligaId));
+      else if (slug) params.set("slug", slug);
+      else if (defaultId) params.set("ligaId", String(defaultId));
+      else params.set("slug", defaultSlug);
+      return request(`/liga/v1/standings?${params.toString()}`);
+    },
+
+    async createMatch({
+      ligaId,
+      homeUserId,
+      awayUserId,
+      roomCode,
+      status = "scheduled",
+      notes = "",
+    }) {
+      const resolvedId = Number(ligaId) || this.defaultId;
+      if (!resolvedId) {
+        const liga = await this.resolveLiga({ slug: this.defaultSlug });
+        ligaId = liga.id;
+      } else {
+        ligaId = resolvedId;
+      }
       return request("/liga/v1/matches", {
         method: "POST",
         auth: true,
         body: {
-          ligaId: this.ligaId,
+          ligaId,
           homeUserId,
           awayUserId,
           roomCode,

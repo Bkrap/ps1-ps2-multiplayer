@@ -19,6 +19,8 @@ function testConfig(overrides = {}) {
   return {
     gamesDir: "/tmp/ps1-games-missing",
     biosDir: "/tmp/ps1-bios-missing",
+    gamesDirPs2: "/tmp/ps2-games-missing",
+    biosDirPs2: "/tmp/ps2-bios-missing",
     maxRooms: 2,
     maxSpectators: 4,
     idleMs: 600000,
@@ -29,6 +31,7 @@ function testConfig(overrides = {}) {
     ligaWpUser: "",
     ligaWpAppPassword: "",
     ligaTekken3Id: 0,
+    ligaTekken3Slug: "tekken-3",
     publicDir: path.join(root, "lobby", "public"),
     ...overrides,
   };
@@ -47,6 +50,7 @@ test("catalog exposes Tekken 3 only", () => {
   assert.ok(tekken, "tekken3 must be enabled");
   assert.equal(tekken.file, "Tekken 3 (USA).cue");
   assert.equal(tekken.players, 2);
+  assert.equal(tekken.ligaSlug, "tekken-3");
   for (const game of games) {
     assert.match(game.id, /^[a-z0-9-]+$/);
     assert.ok(game.file);
@@ -192,9 +196,11 @@ test("http lobby refuses a stream without a token and serves the home page", asy
   try {
     const home = await fetch(`${base}/`);
     assert.equal(home.status, 200);
-    assert.match(await home.text(), /Play Tekken 3 together/);
+    assert.match(await home.text(), /Play together/);
     const script = await fetch(`${base}/app.js`);
-    assert.match(await script.text(), /Create room/);
+    const appJs = await script.text();
+    assert.match(appJs, /Play casual/);
+    assert.match(appJs, /Play ranked/);
 
     const created = await fetch(`${base}/api/rooms`, {
       method: "POST",
@@ -258,8 +264,16 @@ test("ranked match creates mec when recording is healthy and cancels without fil
   const auth = createAuthStore();
   const uploads = [];
   const patches = [];
+  const joins = [];
   const liga = {
     enabled: true,
+    async resolveLiga({ slug, id }) {
+      return { id: id || 89, slug: slug || "tekken-3", title: "Tekken 3", visibility: "public" };
+    },
+    async joinLiga({ ligaId, userId }) {
+      joins.push({ ligaId, userId });
+      return { ligaId, userId, joined: true, canPlay: true };
+    },
     async createMatch({ homeUserId, awayUserId, roomCode }) {
       return { matchId: 501, homeUserId, awayUserId, roomCode };
     },
@@ -298,6 +312,7 @@ test("ranked match creates mec when recording is healthy and cancels without fil
   assert.equal(host.recording.required, true);
   assert.equal(host.you.wpUserId, 11);
   assert.equal(guest.you.wpUserId, 22);
+  assert.ok(joins.length >= 2);
 
   await lobby.requestPlay(host.code, host.token);
   await lobby.whenSettled(host.code);
@@ -317,6 +332,98 @@ test("ranked match creates mec when recording is healthy and cancels without fil
   assert.equal(patches.length, 1);
   assert.equal(patches[0].matchId, 501);
   assert.equal(patches[0].status, "cancelled");
+});
+
+test("auth required blocks create without session; free_nugget bypasses", async () => {
+  const docker = createPreviewRunner();
+  const auth = createAuthStore();
+  const liga = {
+    enabled: true,
+    async resolveLiga() {
+      return { id: 89, slug: "tekken-3", title: "Tekken 3", visibility: "public" };
+    },
+    async joinLiga() {
+      return { joined: true, canPlay: true };
+    },
+    async getStandings() {
+      return { ligaId: 89, slug: "tekken-3", title: "Tekken 3", rows: [] };
+    },
+  };
+  const lobby = new Lobby({
+    config: testConfig({
+      ligaRequireAuth: true,
+      ligaWpUrl: "https://liga.example",
+      ligaWpUser: "ps1-sync",
+      ligaWpAppPassword: "x",
+      ligaTekken3Id: 89,
+    }),
+    games: loadCatalog(path.join(root, "games", "catalog.yaml")),
+    docker,
+    liga,
+    auth,
+  });
+  const server = createServer({ lobby, config: lobby.config, tls: null, auth, liga });
+  const port = await listen(server);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const denied = await fetch(`${base}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ nickname: "Asha", gameId: "tekken3" }),
+    });
+    assert.equal(denied.status, 401);
+
+    const home = await fetch(`${base}/?free_nugget=1`);
+    assert.equal(home.status, 200);
+    const setCookie = home.headers.getSetCookie?.() || [];
+    const cookieHeader = setCookie.find((c) => c.startsWith("ps1_free_nugget="))
+      || (home.headers.get("set-cookie") || "");
+    assert.match(String(cookieHeader), /ps1_free_nugget=1/);
+
+    const cookie = String(cookieHeader).split(";")[0];
+    const games = await fetch(`${base}/api/games`, { headers: { cookie } });
+    const gamesBody = await games.json();
+    assert.equal(gamesBody.authRequired, false);
+    assert.equal(gamesBody.freeNugget, true);
+    assert.equal(gamesBody.rankedPlayable, false);
+
+    const casual = await fetch(`${base}/api/mode/casual`, { method: "POST" });
+    assert.equal(casual.status, 204);
+    const casualCookie = (casual.headers.getSetCookie?.() || []).find((c) => c.startsWith("ps1_free_nugget="))
+      || (casual.headers.get("set-cookie") || "");
+    assert.match(String(casualCookie), /ps1_free_nugget=1/);
+
+    const created = await fetch(`${base}/api/rooms`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ nickname: "Nugget", gameId: "tekken3" }),
+    });
+    assert.equal(created.status, 201);
+    const room = await created.json();
+    assert.equal(room.freeNugget, true);
+    assert.equal(room.recording.required, false);
+
+    const standings = await fetch(`${base}/api/standings?gameId=tekken3`);
+    assert.equal(standings.status, 200);
+    const table = await standings.json();
+    assert.equal(table.slug, "tekken-3");
+  } finally {
+    server.close();
+  }
+});
+
+test("auth required fails closed when WP env missing", async () => {
+  const lobby = new Lobby({
+    config: testConfig({ ligaRequireAuth: true }),
+    games: loadCatalog(path.join(root, "games", "catalog.yaml")),
+    docker: createPreviewRunner(),
+    liga: null,
+    auth: createAuthStore(),
+  });
+  await assert.rejects(
+    () => lobby.createRoom({ nickname: "Asha", gameId: "tekken3" }),
+    (error) => error.status === 503,
+  );
 });
 
 test("leave frees the machine so the next room is not stuck queued", async () => {
@@ -353,6 +460,7 @@ test("deploy files keep the stream behind nginx and the firewall", () => {
   assert.match(setup, /ufw allow 443/);
   assert.match(setup, /fail2ban/);
   const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
-  assert.match(readme, /Moonlight/);
+  assert.match(readme, /DuckStation/);
+  assert.match(readme, /Play casual/);
   assert.doesNotMatch(readme, /https?:\/\/[^\s]*rom/i);
 });
