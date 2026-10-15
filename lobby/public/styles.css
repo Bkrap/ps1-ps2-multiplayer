@@ -163,6 +163,19 @@ code.code {
   border: 1px solid var(--line);
 }
 
+.flex-it {
+  display: flex;
+  justify-content: center;
+  gap: 30px;
+}
+
+.panel-title-sec {
+  font-size: 32px;
+  font-weight: 600;
+  margin-top: 0;
+  margin-bottom: 16px;
+}
+
 .stage iframe {
   display: block;
   width: 100%;

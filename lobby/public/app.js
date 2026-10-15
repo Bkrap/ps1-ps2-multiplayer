@@ -385,20 +385,24 @@ function renderHome(games, error, standings) {
   app.innerHTML = `
     <p class="hint mode-back"><button type="button" class="secondary" id="change-mode">Change mode</button></p>
     ${casual ? "" : authBarHtml()}
-    <section class="panel" ${locked ? "hidden" : ""}>
-      <form id="create">
-        <label>Nickname <input name="nickname" required maxlength="24" autocomplete="nickname" value="${escapeHtml(auth?.displayName || "")}"></label>
-        <label>Game <select name="gameId" id="home-game">${options}</select></label>
-        <button type="submit">Create room</button>
-      </form>
-    </section>
-    <section class="panel" ${locked ? "hidden" : ""}>
-      <form id="join">
-        <label>Nickname <input name="nickname" required maxlength="24" autocomplete="nickname" value="${escapeHtml(auth?.displayName || "")}"></label>
-        <label>Room code <input name="code" required maxlength="6" autocapitalize="characters" spellcheck="false"></label>
-        <button type="submit">Join room</button>
-      </form>
-    </section>
+    <div class="container flex-it">
+      <section class="panel" ${locked ? "hidden" : ""} style="width: 50%;">
+        <p class="panel-title-sec">CREATE ROOM</p>
+        <form id="create">
+          <label>Nickname <input name="nickname" required maxlength="24" autocomplete="nickname" value="${escapeHtml(auth?.displayName || "")}"></label>
+          <label>Game <select name="gameId" id="home-game">${options}</select></label>
+          <button type="submit">Create room</button>
+        </form>
+      </section>
+      <section class="panel" ${locked ? "hidden" : ""} style="width: 50%;">
+        <p class="panel-title-sec">JOIN ROOM</p>
+        <form id="join">
+          <label>Nickname <input name="nickname" required maxlength="24" autocomplete="nickname" value="${escapeHtml(auth?.displayName || "")}"></label>
+          <label>Room code <input name="code" required maxlength="6" autocapitalize="characters" spellcheck="false"></label>
+          <button type="submit">Join room</button>
+        </form>
+      </section>
+    </div>
     ${locked ? `<p class="hint">Register or log in above to create or join a ranked room. Forks without liga-cms cannot do this.</p>` : ""}
     ${casual ? "" : standingsHtml(standings, auth?.wpUserId)}
     ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ""}
